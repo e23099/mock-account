@@ -42,6 +42,42 @@ for instrument, position in account.get_positions().items():
     print(instrument, position)
 ```
 
+### Rebuilding balance / equity history
+
+Version 2 keeps every trade, fee and realized PnL entry, so you can replay
+events in chronological order and capture the account state at each step. The
+snippet below illustrates how to regenerate an equity curve given historical
+prices, FX rates and fills:
+
+```python
+from collections import defaultdict
+
+events = defaultdict(list)
+for price in historical_prices:  # each item -> {instrument, price, currency, timestamp}
+    events[price["timestamp"]].append(("price", price))
+for fx in historical_fx_rates:  # each item -> {from, to, rate, timestamp}
+    events[fx["timestamp"]].append(("fx", fx))
+for fill in historical_trades:  # each item -> {instrument, quantity, price, currency, timestamp, ...}
+    events[fill["timestamp"]].append(("trade", fill))
+
+snapshots = []
+for timestamp in sorted(events):
+    for kind, payload in events[timestamp]:
+        if kind == "price":
+            account.update_price(**payload)
+        elif kind == "fx":
+            account.update_fx_rate(**payload)
+        elif kind == "trade":
+            account.record_trade(**payload)
+    state = account.get_account_state()
+    snapshots.append({"timestamp": timestamp, **state})
+
+# snapshots now contains balance/equity/unrealized history in base currency
+```
+
+By storing each snapshot (for example, in a DataFrame) you can reconstruct the
+entire account balance and equity history for analytics or visualization.
+
 ## Testing
 
 ```bash

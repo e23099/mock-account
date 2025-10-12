@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Dict, Iterable, List, Sequence
+from typing import Iterable, List, Sequence, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .account import Trade
 
 
 @dataclass(frozen=True)
@@ -38,14 +41,14 @@ class Fee:
 class FeeModel(ABC):
     """Base class for all fee models.
 
-    Fee models receive the trade dictionary supplied to
-    :meth:`mock_account.account.MockAccount.record_trade` and return the fees
+    Fee models receive the :class:`mock_account.account.Trade` instance supplied
+    to :meth:`mock_account.account.MockAccount.record_trade` and return the fees
     that should be charged for the trade. Custom models can subclass
     :class:`FeeModel` and implement :meth:`calculate`.
     """
 
     @abstractmethod
-    def calculate(self, trade: Dict[str, object]) -> Sequence[Fee]:
+    def calculate(self, trade: "Trade") -> Sequence[Fee]:
         """Return the fees that should be charged for ``trade``."""
 
 
@@ -57,13 +60,13 @@ class FlatFeeModel(FeeModel):
         self.currency = currency
         self.name = name
 
-    def calculate(self, trade: Dict[str, object]) -> Sequence[Fee]:
+    def calculate(self, trade: "Trade") -> Sequence[Fee]:
         return [
             Fee(
                 name=self.name,
                 amount=self.amount,
                 currency=self.currency,
-                timestamp=int(trade["timestamp"]),
+                timestamp=trade.timestamp,
             )
         ]
 
@@ -98,21 +101,21 @@ class PerNotionalFeeModel(FeeModel):
         self.currency = currency
         self.name = name
 
-    def calculate(self, trade: Dict[str, object]) -> Sequence[Fee]:
-        notional = abs(float(trade["price"]) * float(trade["quantity"]) * float(trade.get("multiplier", 1.0)))
+    def calculate(self, trade: "Trade") -> Sequence[Fee]:
+        notional = abs(trade.price * trade.quantity * trade.multiplier)
         amount = max(notional * self.rate, self.minimum)
-        currency = self.currency or str(trade["currency"])
+        currency = self.currency or trade.currency
         return [
             Fee(
                 name=self.name,
                 amount=amount,
                 currency=currency,
-                timestamp=int(trade["timestamp"]),
+                timestamp=trade.timestamp,
             )
         ]
 
 
-def apply_fee_models(fee_models: Iterable[FeeModel], trade: Dict[str, object]) -> List[Fee]:
+def apply_fee_models(fee_models: Iterable[FeeModel], trade: "Trade") -> List[Fee]:
     """Return the combined fees for ``trade`` from all ``fee_models``."""
 
     fees: List[Fee] = []

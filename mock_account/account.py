@@ -28,6 +28,7 @@ class PositionLot:
     price: float
     currency: str
     timestamp: int
+    multiplier: float
 
 
 @dataclass
@@ -42,6 +43,17 @@ class RealizedPnL:
     fx_rate: float
     timestamp: int
     open_timestamp: int
+
+
+@dataclass
+class Trade:
+    instrument: str
+    quantity: float
+    price: float
+    currency: str
+    timestamp: int
+    multiplier: float = 1.0
+    metadata: Optional[Dict[str, object]] = None
 
 
 class MockAccount:
@@ -74,7 +86,7 @@ class MockAccount:
         self.positions: Dict[str, List[PositionLot]] = {}
         self.prices: Dict[str, PriceRecord] = {}
         self.fx_rates: Dict[Tuple[str, str], FxRate] = {}
-        self.trade_history: List[Dict[str, object]] = []
+        self.trade_history: List[Trade] = []
         self.fee_history: List[Fee] = []
         self.realized_pnl_history: List[RealizedPnL] = []
         self.fee_models: List[FeeModel] = list(fee_models or [])
@@ -128,21 +140,23 @@ class MockAccount:
     ) -> None:
         """Record a trade for ``instrument`` and update cash, positions and fees."""
 
-        trade = {
-            "instrument": instrument,
-            "quantity": float(quantity),
-            "price": float(price),
-            "currency": currency,
-            "timestamp": int(timestamp),
-            "multiplier": float(multiplier),
-        }
-        if metadata is not None:
-            trade["metadata"] = metadata
+        trade = Trade(
+            instrument=instrument,
+            quantity=float(quantity),
+            price=float(price),
+            currency=currency,
+            timestamp=int(timestamp),
+            multiplier=float(multiplier),
+            metadata=metadata,
+        )
 
-        if trade["quantity"] == 0:
+        if trade.quantity == 0:
             raise ValueError("quantity must be non-zero")
 
-        self._apply_cash_flow(currency=currency, amount=-trade["quantity"] * trade["price"] * trade["multiplier"])
+        self._apply_cash_flow(
+            currency=trade.currency,
+            amount=-trade.quantity * trade.price * trade.multiplier,
+        )
         fees = apply_fee_models(self.fee_models, trade)
         for fee in fees:
             self._apply_cash_flow(currency=fee.currency, amount=-fee.amount)
@@ -167,7 +181,7 @@ class MockAccount:
             "unrealized_pnl": unrealized,
         }
 
-    def get_trade_history(self) -> List[Dict[str, object]]:
+    def get_trade_history(self) -> List[Trade]:
         return list(self.trade_history)
 
     def get_fee_history(self) -> List[Fee]:
@@ -222,16 +236,16 @@ class MockAccount:
             price = self.prices.get(instrument)
             if price is None:
                 raise ValueError(f"Missing price for {instrument}")
+            instrument_value = 0.0
             for lot in lots:
                 if lot.currency != price.currency:
                     raise ValueError(
                         f"Currency mismatch for {instrument}: lot {lot.currency} vs price {price.currency}"
                     )
-            net_qty = sum(lot.quantity for lot in lots)
-            market_value += self._convert(price.price * net_qty, price.currency, self.base_currency)
-            for lot in lots:
-                lot_pnl = (price.price - lot.price) * lot.quantity
+                instrument_value += price.price * lot.quantity * lot.multiplier
+                lot_pnl = (price.price - lot.price) * lot.quantity * lot.multiplier
                 unrealized += self._convert(lot_pnl, lot.currency, self.base_currency)
+            market_value += self._convert(instrument_value, price.currency, self.base_currency)
         return market_value, unrealized
 
     def _convert(self, amount: float, from_currency: str, to_currency: str) -> float:
@@ -243,12 +257,13 @@ class MockAccount:
         rate = self.fx_rates[key]
         return float(amount) * rate.rate
 
-    def _update_positions(self, trade: Dict[str, object]) -> List[RealizedPnL]:
-        instrument = str(trade["instrument"])
-        quantity = float(trade["quantity"]) * float(trade["multiplier"])
-        price = float(trade["price"])
-        currency = str(trade["currency"])
-        timestamp = int(trade["timestamp"])
+    def _update_positions(self, trade: Trade) -> List[RealizedPnL]:
+        instrument = trade.instrument
+        quantity = trade.quantity
+        price = trade.price
+        currency = trade.currency
+        timestamp = trade.timestamp
+        multiplier = trade.multiplier
 
         lots = self.positions.setdefault(instrument, [])
         realized: List[RealizedPnL] = []
@@ -257,11 +272,19 @@ class MockAccount:
         idx = 0
         while idx < len(lots) and qty_to_process != 0:
             lot = lots[idx]
+            if lot.currency != currency:
+                raise ValueError(
+                    f"Currency mismatch for {instrument}: lot {lot.currency} vs trade {currency}"
+                )
+            if abs(lot.multiplier - multiplier) > 1e-12:
+                raise ValueError(
+                    f"Multiplier mismatch for {instrument}: lot {lot.multiplier} vs trade {multiplier}"
+                )
             if (lot.quantity > 0) == (qty_to_process > 0):
                 break
             match_qty = min(abs(qty_to_process), abs(lot.quantity))
             direction = 1.0 if lot.quantity > 0 else -1.0
-            pnl_amount = (price - lot.price) * match_qty * direction
+            pnl_amount = (price - lot.price) * match_qty * lot.multiplier * direction
             fx_rate = self._fx_rate_for(currency)
             realized.append(
                 RealizedPnL(
@@ -292,6 +315,7 @@ class MockAccount:
                     price=price,
                     currency=currency,
                     timestamp=timestamp,
+                    multiplier=multiplier,
                 )
             )
 

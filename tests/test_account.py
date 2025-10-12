@@ -100,6 +100,10 @@ def test_short_position_realized_direction():
         multiplier=50,
     )
 
+    positions = account.get_positions()
+    assert positions["ES"]["net_quantity"] == pytest.approx(-2.0)
+    assert positions["ES"]["average_price"] == pytest.approx(4000.0)
+
     account.update_price("ES", price=3900.0, currency="USD", timestamp=2)
     state = account.get_account_state()
     assert state["unrealized_pnl"] == pytest.approx(10000.0)
@@ -116,3 +120,4 @@ def test_short_position_realized_direction():
     realized = account.get_realized_pnl_history()[-1]
     assert realized.direction == "short"
     assert realized.amount == pytest.approx(10000.0)
+    assert realized.quantity == pytest.approx(2.0)
