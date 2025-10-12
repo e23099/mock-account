@@ -45,6 +45,17 @@ class RealizedPnL:
     open_timestamp: int
 
 
+@dataclass
+class Trade:
+    instrument: str
+    quantity: float
+    price: float
+    currency: str
+    timestamp: int
+    multiplier: float = 1.0
+    metadata: Optional[Dict[str, object]] = None
+
+
 class MockAccount:
     """Maintain multi-asset, multi-currency trading balances using FIFO.
 
@@ -75,7 +86,7 @@ class MockAccount:
         self.positions: Dict[str, List[PositionLot]] = {}
         self.prices: Dict[str, PriceRecord] = {}
         self.fx_rates: Dict[Tuple[str, str], FxRate] = {}
-        self.trade_history: List[Dict[str, object]] = []
+        self.trade_history: List[Trade] = []
         self.fee_history: List[Fee] = []
         self.realized_pnl_history: List[RealizedPnL] = []
         self.fee_models: List[FeeModel] = list(fee_models or [])
@@ -129,21 +140,23 @@ class MockAccount:
     ) -> None:
         """Record a trade for ``instrument`` and update cash, positions and fees."""
 
-        trade = {
-            "instrument": instrument,
-            "quantity": float(quantity),
-            "price": float(price),
-            "currency": currency,
-            "timestamp": int(timestamp),
-            "multiplier": float(multiplier),
-        }
-        if metadata is not None:
-            trade["metadata"] = metadata
+        trade = Trade(
+            instrument=instrument,
+            quantity=float(quantity),
+            price=float(price),
+            currency=currency,
+            timestamp=int(timestamp),
+            multiplier=float(multiplier),
+            metadata=metadata,
+        )
 
-        if trade["quantity"] == 0:
+        if trade.quantity == 0:
             raise ValueError("quantity must be non-zero")
 
-        self._apply_cash_flow(currency=currency, amount=-trade["quantity"] * trade["price"] * trade["multiplier"])
+        self._apply_cash_flow(
+            currency=trade.currency,
+            amount=-trade.quantity * trade.price * trade.multiplier,
+        )
         fees = apply_fee_models(self.fee_models, trade)
         for fee in fees:
             self._apply_cash_flow(currency=fee.currency, amount=-fee.amount)
@@ -168,7 +181,7 @@ class MockAccount:
             "unrealized_pnl": unrealized,
         }
 
-    def get_trade_history(self) -> List[Dict[str, object]]:
+    def get_trade_history(self) -> List[Trade]:
         return list(self.trade_history)
 
     def get_fee_history(self) -> List[Fee]:
@@ -244,13 +257,13 @@ class MockAccount:
         rate = self.fx_rates[key]
         return float(amount) * rate.rate
 
-    def _update_positions(self, trade: Dict[str, object]) -> List[RealizedPnL]:
-        instrument = str(trade["instrument"])
-        quantity = float(trade["quantity"])
-        price = float(trade["price"])
-        currency = str(trade["currency"])
-        timestamp = int(trade["timestamp"])
-        multiplier = float(trade.get("multiplier", 1.0))
+    def _update_positions(self, trade: Trade) -> List[RealizedPnL]:
+        instrument = trade.instrument
+        quantity = trade.quantity
+        price = trade.price
+        currency = trade.currency
+        timestamp = trade.timestamp
+        multiplier = trade.multiplier
 
         lots = self.positions.setdefault(instrument, [])
         realized: List[RealizedPnL] = []
