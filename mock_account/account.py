@@ -28,6 +28,7 @@ class PositionLot:
     price: float
     currency: str
     timestamp: int
+    multiplier: float
 
 
 @dataclass
@@ -222,16 +223,16 @@ class MockAccount:
             price = self.prices.get(instrument)
             if price is None:
                 raise ValueError(f"Missing price for {instrument}")
+            instrument_value = 0.0
             for lot in lots:
                 if lot.currency != price.currency:
                     raise ValueError(
                         f"Currency mismatch for {instrument}: lot {lot.currency} vs price {price.currency}"
                     )
-            net_qty = sum(lot.quantity for lot in lots)
-            market_value += self._convert(price.price * net_qty, price.currency, self.base_currency)
-            for lot in lots:
-                lot_pnl = (price.price - lot.price) * lot.quantity
+                instrument_value += price.price * lot.quantity * lot.multiplier
+                lot_pnl = (price.price - lot.price) * lot.quantity * lot.multiplier
                 unrealized += self._convert(lot_pnl, lot.currency, self.base_currency)
+            market_value += self._convert(instrument_value, price.currency, self.base_currency)
         return market_value, unrealized
 
     def _convert(self, amount: float, from_currency: str, to_currency: str) -> float:
@@ -245,10 +246,11 @@ class MockAccount:
 
     def _update_positions(self, trade: Dict[str, object]) -> List[RealizedPnL]:
         instrument = str(trade["instrument"])
-        quantity = float(trade["quantity"]) * float(trade["multiplier"])
+        quantity = float(trade["quantity"])
         price = float(trade["price"])
         currency = str(trade["currency"])
         timestamp = int(trade["timestamp"])
+        multiplier = float(trade.get("multiplier", 1.0))
 
         lots = self.positions.setdefault(instrument, [])
         realized: List[RealizedPnL] = []
@@ -257,11 +259,19 @@ class MockAccount:
         idx = 0
         while idx < len(lots) and qty_to_process != 0:
             lot = lots[idx]
+            if lot.currency != currency:
+                raise ValueError(
+                    f"Currency mismatch for {instrument}: lot {lot.currency} vs trade {currency}"
+                )
+            if abs(lot.multiplier - multiplier) > 1e-12:
+                raise ValueError(
+                    f"Multiplier mismatch for {instrument}: lot {lot.multiplier} vs trade {multiplier}"
+                )
             if (lot.quantity > 0) == (qty_to_process > 0):
                 break
             match_qty = min(abs(qty_to_process), abs(lot.quantity))
             direction = 1.0 if lot.quantity > 0 else -1.0
-            pnl_amount = (price - lot.price) * match_qty * direction
+            pnl_amount = (price - lot.price) * match_qty * lot.multiplier * direction
             fx_rate = self._fx_rate_for(currency)
             realized.append(
                 RealizedPnL(
@@ -292,6 +302,7 @@ class MockAccount:
                     price=price,
                     currency=currency,
                     timestamp=timestamp,
+                    multiplier=multiplier,
                 )
             )
 
